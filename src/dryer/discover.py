@@ -79,6 +79,10 @@ def is_test_file(path: str | Path) -> bool:
     return any(part in TEST_DIRS for part in file_path.parts)
 
 
+def _skipped_dir(name: str) -> bool:
+    return name in SKIP_DIRS or name in TEST_DIRS
+
+
 def _walk(root: Path) -> list[Path]:
     if not root.exists():
         return []
@@ -86,9 +90,7 @@ def _walk(root: Path) -> list[Path]:
         return [root]
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            name for name in dirnames if name not in SKIP_DIRS and name not in TEST_DIRS
-        ]
+        dirnames[:] = [name for name in dirnames if not _skipped_dir(name)]
         for name in filenames:
             path = Path(dirpath) / name
             if language_of(path) is None or is_test_file(path):

@@ -1,7 +1,9 @@
 from pathlib import Path
 
-from dryer.cli import main, parse_args, run
-from dryer.discover import language_of
+import pytest
+
+from dryer.cli import _changed_files, _count, _tracked_source, main, parse_args, run, select_files
+from dryer.discover import is_test_file, iter_source_files, language_of
 
 
 def write_source(root: Path, name: str, text: str) -> None:
@@ -135,3 +137,187 @@ def test_main_exits(monkeypatch):
     monkeypatch.setattr("dryer.cli.sys.exit", lambda code: codes.append(code))
     main(["--help"])
     assert codes == [0]
+
+
+def test_names_that_are_tests():
+    names = [
+        "pkg/foo_test.go",
+        "src/app_test.clj",
+        "src/app_test.cljc",
+        "src/app_test.cljs",
+        "src/app_test.cljd",
+        "src/app_test.bb",
+        "ui/a.test.ts",
+        "ui/a.spec.ts",
+        "ui/a.test.tsx",
+        "ui/a.spec.tsx",
+        "ui/a.test.mts",
+        "ui/a.spec.mts",
+        "tests/conftest.py",
+        "pkg/foo_test.py",
+        "pkg/test_foo.py",
+        "tests/app.py",
+    ]
+    for name in names:
+        assert is_test_file(name), name
+    assert not is_test_file("src/app.py")
+
+
+class _Git:
+    def __init__(self, returncode, stdout, stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_changed_files_reads_porcelain(tmp_path, monkeypatch):
+    stdout = ' M src/a.py\nR  old.py -> src/b.py\n?? "src/c d.py"\n\nX\n'
+    monkeypatch.setattr(
+        "dryer.cli.subprocess.run",
+        lambda *args, **kwargs: _Git(0, stdout),
+    )
+    assert _changed_files(tmp_path) == [
+        (tmp_path / "src/a.py").resolve(),
+        (tmp_path / "src/b.py").resolve(),
+        (tmp_path / "src/c d.py").resolve(),
+    ]
+
+
+def test_changed_files_reports_git_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        "dryer.cli.subprocess.run",
+        lambda *args, **kwargs: _Git(1, "", "fatal: not a git repository\n"),
+    )
+    assert _changed_files(tmp_path) == []
+    assert capsys.readouterr().err == "fatal: not a git repository\n"
+
+    monkeypatch.setattr(
+        "dryer.cli.subprocess.run",
+        lambda *args, **kwargs: _Git(1, "", "  \n"),
+    )
+    assert _changed_files(tmp_path) == []
+    assert capsys.readouterr().err == "git status failed\n"
+
+
+def test_changed_limits_the_report(tmp_path, monkeypatch, capsys):
+    body = "def alpha(xs):\n    ys = filter(xs, odd)\n    zs = map(ys, inc)\n    return list(zs)\n"
+    other = "def beta(items):\n    kept = filter(items, even)\n    out = map(kept, dec)\n    return list(out)\n"
+    write_source(tmp_path, "src/a.py", body)
+    write_source(tmp_path, "src/b.py", other)
+    write_source(tmp_path, "src/c.py", body)
+    write_source(tmp_path, "tests/test_a.py", other)
+    stdout = " M src/a.py\n M src/b.py\n M tests/test_a.py\n ?? README.md\n"
+    monkeypatch.setattr(
+        "dryer.cli.subprocess.run",
+        lambda *args, **kwargs: _Git(0, stdout),
+    )
+    assert run(["--root", str(tmp_path), "--changed", "--min-lines", "3", "--min-nodes", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "src/a.py" in out
+    assert "src/b.py" in out
+    assert "src/c.py" not in out
+    assert "test_a.py" not in out
+
+
+def test_an_option_without_a_value_is_a_usage_error(capsys):
+    assert run(["--threshold"]) == 1
+    assert "--threshold requires a value" in capsys.readouterr().err
+
+
+def test_an_empty_value_is_rejected(capsys):
+    assert run(["file.py", "--min-lines", ""]) == 1
+    assert "--min-lines requires a value" in capsys.readouterr().err
+
+
+def test_a_flag_is_not_a_value(capsys):
+    assert run(["--min-lines", "--min-nodes", "1"]) == 1
+    assert "--min-lines requires a value" in capsys.readouterr().err
+
+
+def test_zero_is_a_valid_count():
+    options = parse_args(["--min-lines", "0", "--min-nodes", "0"])
+    assert options.action == "scan"
+    assert options.min_lines == 0
+    assert options.min_nodes == 0
+
+
+def test_a_negative_count_is_rejected():
+    with pytest.raises(ValueError, match="non-negative"):
+        _count("-1", "--min-lines")
+
+
+def test_a_count_must_be_an_integer(capsys):
+    assert run(["--min-lines", "nope"]) == 1
+    assert "--min-lines requires an integer" in capsys.readouterr().err
+
+
+def test_a_threshold_must_be_a_number(capsys):
+    assert run(["--threshold", "nope"]) == 1
+    assert "--threshold requires a number" in capsys.readouterr().err
+
+
+def test_parse_reads_the_process_arguments(monkeypatch):
+    monkeypatch.setattr("dryer.cli.sys.argv", ["dryer", "only-this"])
+    assert parse_args().positionals == ["only-this"]
+
+
+def test_text_format_wins_when_it_comes_last(tmp_path, capsys):
+    write_source(tmp_path, "one.py", "def alpha(xs):\n    return xs\n")
+    assert run(["--root", str(tmp_path), "--edn", "--text", "--min-lines", "1", "--min-nodes", "1"]) == 0
+    assert capsys.readouterr().out == "No duplicate candidates found.\n"
+
+
+def test_source_root_limits_the_walk(tmp_path):
+    write_source(tmp_path, "src/a.py", "x = 1\n")
+    write_source(tmp_path, "extra/b.py", "x = 1\n")
+    options = parse_args(["--root", str(tmp_path), "--source-root", "src"])
+    files = [path.relative_to(tmp_path).as_posix() for path in select_files(options)]
+    assert files == ["src/a.py"]
+
+
+def test_git_status_asks_for_text_without_checking(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return _Git(0, " M src/a.py\n")
+
+    monkeypatch.setattr("dryer.cli.subprocess.run", fake_run)
+    assert _changed_files(tmp_path) == [(tmp_path / "src/a.py").resolve()]
+    assert seen["args"] == ["git", "status", "--porcelain"]
+    assert seen["kwargs"]["check"] is False
+    assert seen["kwargs"]["capture_output"] is True
+    assert seen["kwargs"]["text"] is True
+    assert seen["kwargs"]["cwd"] == tmp_path
+
+
+def test_a_status_line_of_four_characters_is_a_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "dryer.cli.subprocess.run",
+        lambda *args, **kwargs: _Git(0, " M a\n"),
+    )
+    assert _changed_files(tmp_path) == [(tmp_path / "a").resolve()]
+
+
+def test_changed_source_skips_unknown_and_test_files(tmp_path):
+    assert _tracked_source(tmp_path / "README.md") is False
+    assert _tracked_source(tmp_path / "tests" / "test_a.py") is False
+    assert _tracked_source(tmp_path / "src" / "a.py") is True
+
+
+def test_test_files_and_skipped_directories_are_left_out(tmp_path):
+    write_source(tmp_path, "src/app.py", "x = 1\n")
+    write_source(tmp_path, "src/foo_test.py", "x = 1\n")
+    write_source(tmp_path, "target/app.py", "x = 1\n")
+    write_source(tmp_path, "tests/app.py", "x = 1\n")
+    relative = [path.relative_to(tmp_path).as_posix() for path in iter_source_files([tmp_path])]
+    assert relative == ["src/app.py"]
+
+
+def test_a_second_report_replaces_the_snapshot(tmp_path, capsys):
+    write_source(tmp_path, "one.py", "def alpha(xs):\n    return xs\n")
+    args = ["--root", str(tmp_path), "--min-lines", "1", "--min-nodes", "1"]
+    assert run(args) == 0
+    assert run(args) == 0
+    assert (tmp_path / ".metrics" / "dry.edn").read_text(encoding="utf-8") == "{:candidates []}\n"

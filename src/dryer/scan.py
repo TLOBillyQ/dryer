@@ -41,6 +41,26 @@ def scan_files(
     return entries, warnings
 
 
+def _same_span(left: Entry, right: Entry) -> bool:
+    if left.file != right.file:
+        return False
+    if left.start_line != right.start_line:
+        return False
+    return left.end_line == right.end_line
+
+
+def _duplicate_key(item: Duplicate):
+    score = -item.score
+    return (
+        score,
+        item.language,
+        item.left.file,
+        item.left.start_line,
+        item.right.file,
+        item.right.start_line,
+    )
+
+
 def find_duplicates(entries: list[Entry], threshold: float) -> list[Duplicate]:
     """Pair forms of the same language. Each unordered pair is reported once."""
 
@@ -52,11 +72,7 @@ def find_duplicates(entries: list[Entry], threshold: float) -> list[Duplicate]:
     for language, group in by_language.items():
         for index, left in enumerate(group):
             for right in group[index + 1 :]:
-                if (
-                    left.file == right.file
-                    and left.start_line == right.start_line
-                    and left.end_line == right.end_line
-                ):
+                if _same_span(left, right):
                     continue
                 score = jaccard(left.fingerprints, right.fingerprints)
                 if score < threshold:
@@ -71,14 +87,5 @@ def find_duplicates(entries: list[Entry], threshold: float) -> list[Duplicate]:
                         right_nodes=right.nodes,
                     )
                 )
-    found.sort(
-        key=lambda item: (
-            -item.score,
-            item.language,
-            item.left.file,
-            item.left.start_line,
-            item.right.file,
-            item.right.start_line,
-        )
-    )
+    found.sort(key=_duplicate_key)
     return found

@@ -218,24 +218,15 @@ class Reader:
         form = self.read_form()
         if not isinstance(form, Coll) or form.kind != "list":
             raise ReadError(self.line, "reader conditional body must be a list")
-        chosen = None
-        index = 0
-        items = form.items
-        while index + 1 < len(items):
-            feature = items[index]
-            expr = items[index + 1]
-            index += 2
-            name = feature.name if isinstance(feature, Kw) else None
-            if name in {"clj", "default"}:
-                chosen = expr
-                break
+        chosen = _chosen_branch(form.items)
         if chosen is None:
             return None
         if not splicing:
             return chosen
-        if isinstance(chosen, Coll) and chosen.kind in {"list", "vector"}:
-            return Splice(list(chosen.items))
-        raise ReadError(self.line, "splicing reader conditional needs a collection")
+        spliced = _spliced(chosen)
+        if spliced is None:
+            raise ReadError(self.line, "splicing reader conditional needs a collection")
+        return spliced
 
     def read_form(self):
         self.skip_ws()
@@ -283,15 +274,47 @@ class Reader:
         return Sym(token, line)
 
 
+def _branch_name(feature):
+    if isinstance(feature, Kw):
+        return feature.name
+    return None
+
+
+def _chosen_branch(items):
+    index = 0
+    while index + 1 < len(items):
+        expr = items[index + 1]
+        if _branch_name(items[index]) in {"clj", "default"}:
+            return expr
+        index += 2
+    return None
+
+
+def _spliced(chosen):
+    if isinstance(chosen, Coll) and chosen.kind in {"list", "vector"}:
+        return Splice(list(chosen.items))
+    return None
+
+
+def _strip_bom(text: str) -> str:
+    if text.startswith("\ufeff"):
+        return text[1:]
+    return text
+
+
+def _skip_shebang(reader: Reader, text: str) -> None:
+    if not text.startswith("#!"):
+        return
+    while reader.peek() not in (None, "\n"):
+        reader.get()
+
+
 def read_source(text: str) -> tuple[list, str | None]:
     """Top-level forms, plus a warning if a later form could not be read."""
 
-    if text.startswith("\ufeff"):
-        text = text[1:]
+    text = _strip_bom(text)
     reader = Reader(text)
-    if text.startswith("#!"):
-        while not reader.eof() and reader.peek() != "\n":
-            reader.get()
+    _skip_shebang(reader, text)
     forms: list = []
     while True:
         reader.skip_ws()
@@ -324,24 +347,26 @@ def max_line(form) -> int:
     return best
 
 
+def _normalize_list(form):
+    if not form.items:
+        return [K("list"), K("literal")]
+    head_form, *args = form.items
+    return [K("list"), normalize(head_form, True), *[normalize(arg, False) for arg in args]]
+
+
 def normalize(form, head: bool = False):
     """dry4clj's `normalize-form`. Collection heads are normalized in full."""
 
     if isinstance(form, Coll):
         if form.kind == "list":
-            if not form.items:
-                return [K("list"), K("literal")]
-            head_form, *args = form.items
-            return [K("list"), normalize(head_form, True), *[normalize(arg, False) for arg in args]]
+            return _normalize_list(form)
         if form.kind == "vector":
             return [K("vector"), *[normalize(item, False) for item in form.items]]
         if form.kind == "set":
             return [K("set"), *[normalize(item, False) for item in form.items]]
         if form.kind == "map":
-            return [
-                K("map"),
-                *[[normalize(key, False), normalize(value, False)] for key, value in form.pairs],
-            ]
+            pairs = [[normalize(key, False), normalize(value, False)] for key, value in form.pairs]
+            return [K("map"), *pairs]
         return [K("literal")]
     if isinstance(form, Sym):
         if head:

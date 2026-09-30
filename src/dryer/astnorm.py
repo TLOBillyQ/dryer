@@ -189,32 +189,39 @@ def _is_literal(node) -> bool:
     return True
 
 
-def _normalize_call(node):
+def _named_before_args(node):
     incoming = []
-    args = None
     for child in node.named_children:
         if child.type in _ARG_LISTS:
-            args = child
-            break
+            return incoming, child
         incoming.append(child)
-    type_args = [child for child in incoming if child.type in _TYPE_ARGS]
-    rest = [child for child in incoming if child.type not in _TYPE_ARGS]
+    return incoming, None
+
+
+def _without_type_args(nodes):
+    type_args = [child for child in nodes if child.type in _TYPE_ARGS]
+    rest = [child for child in nodes if child.type not in _TYPE_ARGS]
+    return rest, type_args
+
+
+def _extend_normalized(out, nodes) -> None:
+    for node in nodes:
+        norm = _normalize(node, False)
+        if norm is not None:
+            out.append(norm)
+
+
+def _normalize_call(node):
+    incoming, args = _named_before_args(node)
+    rest, type_args = _without_type_args(incoming)
     out = [K(node.type)]
     if rest:
         *receivers, callee = rest
-        for receiver in receivers:
-            norm = _normalize(receiver, False)
-            if norm is not None:
-                out.append(norm)
+        _extend_normalized(out, receivers)
         out.append(_normalize_callee(callee))
-    for type_node in type_args:
-        norm = _normalize(type_node, False)
-        if norm is not None:
-            out.append(norm)
+    _extend_normalized(out, type_args)
     if args is not None:
-        norm = _normalize(args, False)
-        if norm is not None:
-            out.append(norm)
+        _extend_normalized(out, [args])
     return out
 
 
@@ -244,20 +251,29 @@ def _normalize_path(node):
     return parts
 
 
+def _normalized_name(name, head: bool):
+    """Keep a member's spelling when it is the thing being called."""
+
+    if name.type in _IDENTIFIERS:
+        if head:
+            return [K("symbol"), _text(name)]
+        return K("symbol")
+    if head:
+        return _normalize_callee(name)
+    return _normalize(name, False)
+
+
 def _normalize_attr(node, head: bool):
     named = list(node.named_children)
-    parts = [K(node.type)]
     if not named:
-        return parts
+        return [K(node.type)]
     *objects, name = named
+    parts = [K(node.type)]
     for obj in objects:
         norm = _normalize(obj, False)
         if norm is not None:
             parts.append(norm)
-    if name.type in _IDENTIFIERS:
-        parts.append([K("symbol"), _text(name)] if head else K("symbol"))
-    else:
-        nested = _normalize_callee(name) if head else _normalize(name, False)
-        if nested is not None:
-            parts.append(nested)
+    nested = _normalized_name(name, head)
+    if nested is not None:
+        parts.append(nested)
     return parts

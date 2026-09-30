@@ -159,14 +159,13 @@ def parse_args(argv: list[str] | None = None) -> Options:
     return options
 
 
+def _git_status(root: Path):
+    args = ["git", "status", "--porcelain"]
+    return subprocess.run(args, cwd=root, check=False, capture_output=True, text=True)
+
+
 def _changed_files(root: Path) -> list[Path]:
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = _git_status(root)
     if result.returncode != 0:
         print(result.stderr.strip() or "git status failed", file=sys.stderr)
         return []
@@ -196,12 +195,14 @@ def _positionals(root: Path, args: list[str]) -> tuple[list[Path], list[str]]:
     return existing, filters
 
 
+def _tracked_source(path: Path) -> bool:
+    if language_of(path) is None:
+        return False
+    return not is_test_file(path)
+
+
 def _changed_source(root: Path) -> list[Path]:
-    return [
-        path
-        for path in _changed_files(root)
-        if language_of(path) is not None and not is_test_file(path)
-    ]
+    return [path for path in _changed_files(root) if _tracked_source(path)]
 
 
 def _explicit_files(existing: list[Path]) -> list[Path]:

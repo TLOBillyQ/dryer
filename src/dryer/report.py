@@ -34,32 +34,32 @@ def _edn_float(value: float) -> str:
     return text
 
 
+def _span_edn(span) -> str:
+    return (
+        f"{{:file {_edn_string(span.file)}, "
+        f":start-line {span.start_line}, :end-line {span.end_line}}}"
+    )
+
+
+def _candidate_edn(candidate: Duplicate) -> str:
+    return "\n".join(
+        [
+            f" {{:score {_edn_float(candidate.score)}",
+            f"  :language {_edn_string(candidate.language)}",
+            f"  :left {_span_edn(candidate.left)}",
+            f"  :right {_span_edn(candidate.right)}",
+            f"  :left-nodes {candidate.left_nodes}",
+            f"  :right-nodes {candidate.right_nodes}}}",
+        ]
+    )
+
+
 def render_edn(candidates: list[Duplicate]) -> str:
     """EDN map `{:candidates [...]}` with dry4clj's keys, plus `:language`."""
 
     if not candidates:
         return "{:candidates []}\n"
-    rows = []
-    for candidate in candidates:
-        left = candidate.left
-        right = candidate.right
-        rows.append(
-            " {:score "
-            + _edn_float(candidate.score)
-            + "\n  :language "
-            + _edn_string(candidate.language)
-            + "\n  :left {:file "
-            + _edn_string(left.file)
-            + f", :start-line {left.start_line}, :end-line {left.end_line}"
-            + "}"
-            + "\n  :right {:file "
-            + _edn_string(right.file)
-            + f", :start-line {right.start_line}, :end-line {right.end_line}"
-            + "}"
-            + f"\n  :left-nodes {candidate.left_nodes}"
-            + f"\n  :right-nodes {candidate.right_nodes}"
-            + "}"
-        )
+    rows = [_candidate_edn(candidate) for candidate in candidates]
     return "{:candidates [\n" + "\n".join(rows) + "\n]}\n"
 
 
