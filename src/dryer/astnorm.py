@@ -5,6 +5,9 @@ type constructed by `new`. Local names, field names, type names in argument
 position, and literals become generic markers. Two functions that call the
 same operations in the same shape therefore share a fingerprint set even when
 their locals differ.
+
+Lua's `~=`, `//`, `..`, and `#` count as operators only in Lua. Rust and
+Python spell other tokens the same way, and their scores must not move.
 """
 
 from __future__ import annotations
@@ -113,8 +116,13 @@ _OPERATORS = {
     "?",
 }
 
+_LANGUAGE_OPERATORS = {
+    "lua": frozenset({"~=", "//", "..", "#"}),
+}
+
 _CALLS = {
     "call",
+    "function_call",
     "call_expression",
     "method_invocation",
     "object_creation_expression",
@@ -127,6 +135,8 @@ _ATTRIBUTES = {
     "selector_expression",
     "field_access",
     "field_expression",
+    "dot_index_expression",
+    "method_index_expression",
 }
 
 _SCOPED = {
@@ -138,13 +148,15 @@ _ARG_LISTS = {"argument_list", "arguments"}
 _TYPE_ARGS = {"type_arguments", "type_parameters"}
 
 _DATA: bytes = b""
+_EXTRA_OPERATORS: frozenset = frozenset()
 
 
-def normalize(node, data: bytes):
+def normalize(node, data: bytes, language: str | None = None):
     """Normalized tree for `node`, or None when the node is only punctuation."""
 
-    global _DATA
+    global _DATA, _EXTRA_OPERATORS
     _DATA = data
+    _EXTRA_OPERATORS = _LANGUAGE_OPERATORS.get(language, frozenset())
     return _normalize(node)
 
 
@@ -155,7 +167,7 @@ def _text(node) -> str:
 def _normalize(node, head: bool = False):
     if node.type in _SKIP:
         return None
-    if node.type in _OPERATORS:
+    if node.type in _OPERATORS or node.type in _EXTRA_OPERATORS:
         return [K("symbol"), node.type]
     if not node.is_named:
         return None

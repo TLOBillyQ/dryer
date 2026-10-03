@@ -1,7 +1,7 @@
 [project]
 name = "dryer"
 version = "0.1.0"
-description = "Structural duplicate finder for Clojure, Java, Go, TypeScript, Rust, and Python."
+description = "Structural duplicate finder for Clojure, Java, Go, TypeScript, Rust, Python, and Lua."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

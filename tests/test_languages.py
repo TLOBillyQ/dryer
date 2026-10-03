@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from dryer.astnorm import normalize
 from dryer.extract import entries_in_source
 from dryer.model import Entry
 from dryer.scan import _keep, find_duplicates, scan_files
@@ -111,6 +112,20 @@ pub fn beta(items: Vec<i32>) -> Vec<i32> {
 }
 """
 
+LUA_LEFT = """\
+local function alpha(xs)
+  local ys = filter(xs, odd)
+  return map(ys, inc)
+end
+"""
+
+LUA_RIGHT = """\
+local function beta(items)
+  local kept = filter(items, even)
+  return map(kept, dec)
+end
+"""
+
 
 def test_each_language_matches_renamed_locals(tmp_path):
     samples = {
@@ -126,6 +141,8 @@ def test_each_language_matches_renamed_locals(tmp_path):
         "right.tsx": TSX_RIGHT,
         "left.rs": RUST_LEFT,
         "right.rs": RUST_RIGHT,
+        "left.lua": LUA_LEFT,
+        "right.lua": LUA_RIGHT,
     }
     for name, source in samples.items():
         write_source(tmp_path, name, source)
@@ -133,7 +150,7 @@ def test_each_language_matches_renamed_locals(tmp_path):
     by_language = {}
     for item in found:
         by_language.setdefault(item.language, []).append(item)
-    assert set(by_language) == {"java", "go", "python", "typescript", "rust"}
+    assert set(by_language) == {"java", "go", "python", "typescript", "rust", "lua"}
     assert [(item.left.file, item.right.file) for item in by_language["typescript"]] == [
         ("left.ts", "right.ts"),
         ("left.tsx", "right.tsx"),
@@ -237,7 +254,14 @@ class Right {
 
 
 def _suffix(language: str) -> str:
-    return {"python": "py", "go": "go", "rust": "rs", "java": "java", "typescript": "ts"}[language]
+    return {
+        "python": "py",
+        "go": "go",
+        "rust": "rs",
+        "java": "java",
+        "typescript": "ts",
+        "lua": "lua",
+    }[language]
 
 
 def test_callee_names_stay_and_member_names_do_not(tmp_path):
@@ -308,6 +332,18 @@ export function beta(items: number[]): number {
   return foo<number>(items.baz);
 }
 """,
+        "left.lua": """\
+function M.alpha(xs)
+  xs:push(xs.total)
+  return string.upper(xs.total)
+end
+""",
+        "right.lua": """\
+function M.beta(items)
+  items:push(items.count)
+  return string.upper(items.count)
+end
+""",
     }
     for name, source in samples.items():
         write_source(tmp_path, name, source)
@@ -315,7 +351,7 @@ export function beta(items: number[]): number {
     by_language = {}
     for item in found:
         by_language.setdefault(item.language, []).append(item)
-    assert set(by_language) == {"python", "go", "rust", "java", "typescript"}
+    assert set(by_language) == {"python", "go", "rust", "java", "typescript", "lua"}
     for language, group in by_language.items():
         assert [(item.left.file, item.right.file, item.score) for item in group] == [
             (f"left.{_suffix(language)}", f"right.{_suffix(language)}", 1.0)
@@ -599,3 +635,36 @@ def test_keep_uses_the_line_and_node_minimums():
     assert _keep(_entry("a.py", 1, 4, {"q"}, nodes=20), 4, 20) is True
     assert _keep(_entry("a.py", 1, 3, {"q"}, nodes=20), 4, 20) is False
     assert _keep(_entry("a.py", 1, 4, {"q"}, nodes=19), 4, 20) is False
+
+
+def _lua_starts(source: str) -> list[int]:
+    entries, _warning = entries_in_source("lua", source, "a.lua", "a.lua")
+    return [entry.start_line for entry in entries]
+
+
+def test_lua_entries_are_declarations_and_assigned_functions():
+    source = """\
+local function outer(xs)
+  local function inner(n) return n end
+  table.sort(xs, function(a, b) return a < b end)
+  return inner(1)
+end
+M.bar = function() return 1 end
+table.sort({}, function(a, b) return a end)
+local t = { f = function() end }
+"""
+    assert _lua_starts(source) == [1, 6]
+
+
+def test_lua_operators_count_only_in_lua():
+    def normalized(language, source, grammar):
+        data, tree = parse(source, grammar)
+        return repr(normalize(tree.root_node, data, language))
+
+    lua = "return a .. #b ~= c // d\n"
+    assert normalized("lua", lua, "lua") != normalized(None, lua, "lua")
+    assert "'..'" in normalized("lua", lua, "lua")
+    python = "x = a // b\n"
+    assert normalized("python", python, "python") == normalized(None, python, "python")
+    rust = "fn f() { let r = 0..n; }\n"
+    assert normalized("rust", rust, "rust") == normalized(None, rust, "rust")

@@ -20,6 +20,7 @@ def test_language_detection():
     assert language_of("ui/view.tsx") == "typescript"
     assert language_of("src/lib.rs") == "rust"
     assert language_of("src/dryer/cli.py") == "python"
+    assert language_of("src/calc/init.lua") == "lua"
     assert language_of("types.d.ts") is None
     assert language_of("notes.md") is None
 
@@ -321,3 +322,17 @@ def test_a_second_report_replaces_the_snapshot(tmp_path, capsys):
     assert run(args) == 0
     assert run(args) == 0
     assert (tmp_path / ".metrics" / "dry.edn").read_text(encoding="utf-8") == "{:candidates []}\n"
+
+
+def test_lua_fixture_reports_the_copied_function(tmp_path, monkeypatch):
+    import shutil
+    from pathlib import Path
+
+    project = tmp_path / "lua_project"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "lua_project", project)
+    monkeypatch.chdir(project)
+    run([])
+    snapshot = (project / ".metrics" / "dry.edn").read_text(encoding="utf-8")
+    assert ':language "lua"' in snapshot
+    assert ':left {:file "src/calc/init.lua", :start-line 14, :end-line 20}' in snapshot
+    assert ':right {:file "src/calc/stats.lua", :start-line 5, :end-line 11}' in snapshot

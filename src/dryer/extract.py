@@ -3,7 +3,8 @@
 Clojure compares every top-level list except `ns`, matching dry4clj. The other
 languages compare the functions and methods crapper scores: bodies, not
 signatures alone, and not callbacks nested inside another function. Rust
-functions inside `mod tests` are test code and are skipped.
+functions inside `mod tests` are test code and are skipped. Lua compares
+function declarations and function expressions assigned to a name.
 """
 
 from __future__ import annotations
@@ -138,12 +139,33 @@ def _rust_nodes(data: bytes, root) -> list:
     return found
 
 
+_LUA_FUNCTION = {"function_declaration", "function_definition"}
+
+
+def _lua_assigned(node) -> bool:
+    values = node.parent
+    if values is None or values.type != "expression_list":
+        return False
+    return values.parent is not None and values.parent.type == "assignment_statement"
+
+
+def _lua_nodes(data: bytes, root) -> list:
+    found = []
+    for node in descendants(root):
+        if node.type not in _LUA_FUNCTION or _inside(node, _LUA_FUNCTION):
+            continue
+        if node.type == "function_declaration" or _lua_assigned(node):
+            found.append(node)
+    return found
+
+
 _PICKERS = {
     "java": ("java", _java_nodes),
     "go": ("go", _go_nodes),
     "python": ("python", _python_nodes),
     "typescript": (_grammar, _typescript_nodes),
     "rust": ("rust", _rust_nodes),
+    "lua": ("lua", _lua_nodes),
 }
 
 
@@ -153,7 +175,7 @@ def _tree_entries(language: str, source: str, path: str, file: str) -> list[Entr
     data, tree = parse(source, grammar)
     entries = []
     for node in pick(data, tree.root_node):
-        normalized = normalize(node, data)
+        normalized = normalize(node, data, language)
         if normalized is None:
             continue
         entries.append(
