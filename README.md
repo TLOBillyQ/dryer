@@ -107,6 +107,26 @@ Clojure reader conditionals keep the `:clj` branch, as dry4clj does. Syntax-quot
 
 A missing or unreadable Clojure form is reported on stderr. Forms read before it are still compared. The run exits `0` after a report, `1` on a usage error, and `2` on an unknown `--format`.
 
+## Windows
+
+dryer runs on Windows through WSL2 with Ubuntu. Native Windows is not supported.
+
+1. In an administrator PowerShell, run `wsl --install` and reboot.
+2. Open Ubuntu and clone into the Linux home directory, not `/mnt/c`.
+   Windows drives are slow under WSL2 and break symlinks:
+
+   ```bash
+   cd ~
+   git clone -b lua https://github.com/TLOBillyQ/dryer.git
+   ```
+
+3. Run `dryer/scripts/setup-ubuntu.sh`. It installs Python, Lua 5.4,
+   busted, luacov, and luacov-reporter-lcov, then creates `.venv`.
+4. Edit in VS Code with the WSL extension (`code .` from Ubuntu).
+
+dryer warns at startup when it runs on native Windows or on a project
+under `/mnt/`.
+
 ## Development
 
 ```bash
